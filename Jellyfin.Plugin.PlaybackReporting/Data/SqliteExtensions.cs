@@ -1,36 +1,86 @@
-﻿/*
-Copyright(C) 2018
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program. If not, see<http://www.gnu.org/licenses/>.
-*/
+#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
-using System.IO;
-using MediaBrowser.Model.Serialization;
-using SQLitePCL.pretty;
+using Microsoft.Data.Sqlite;
 
 namespace Jellyfin.Plugin.PlaybackReporting.Data
 {
-    // TODO yet another file that is COPIED from core
     public static class SqliteExtensions
     {
+        private const string DatetimeFormatUtc = "yyyy-MM-dd HH:mm:ss.FFFFFFFK";
+        private const string DatetimeFormatLocal = "yyyy-MM-dd HH:mm:ss.FFFFFFF";
+
+        /// <summary>
+        /// An array of ISO-8601 DateTime formats that we support parsing.
+        /// </summary>
+        private static readonly string[] _datetimeFormats = new string[]
+        {
+            "THHmmssK",
+            "THHmmK",
+            "HH:mm:ss.FFFFFFFK",
+            "HH:mm:ssK",
+            "HH:mmK",
+            DatetimeFormatUtc,
+            "yyyy-MM-dd HH:mm:ssK",
+            "yyyy-MM-dd HH:mmK",
+            "yyyy-MM-ddTHH:mm:ss.FFFFFFFK",
+            "yyyy-MM-ddTHH:mmK",
+            "yyyy-MM-ddTHH:mm:ssK",
+            "yyyyMMddHHmmssK",
+            "yyyyMMddHHmmK",
+            "yyyyMMddTHHmmssFFFFFFFK",
+            "THHmmss",
+            "THHmm",
+            "HH:mm:ss.FFFFFFF",
+            "HH:mm:ss",
+            "HH:mm",
+            DatetimeFormatLocal,
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-ddTHH:mm:ss.FFFFFFF",
+            "yyyy-MM-ddTHH:mm",
+            "yyyy-MM-ddTHH:mm:ss",
+            "yyyyMMddHHmmss",
+            "yyyyMMddHHmm",
+            "yyyyMMddTHHmmssFFFFFFF",
+            "yyyy-MM-dd",
+            "yyyyMMdd",
+            "yy-MM-dd"
+        };
+
+        public static IEnumerable<SqliteDataReader> Query(this SqliteConnection sqliteConnection, string commandText)
+        {
+            if (sqliteConnection.State != ConnectionState.Open)
+            {
+                sqliteConnection.Open();
+            }
+
+            using var command = sqliteConnection.CreateCommand();
+            command.CommandText = commandText;
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    yield return reader;
+                }
+            }
+        }
+
+        public static void Execute(this SqliteConnection sqliteConnection, string commandText)
+        {
+            using var command = sqliteConnection.CreateCommand();
+            command.CommandText = commandText;
+            command.ExecuteNonQuery();
+        }
+
         public static string ToDateTimeParamValue(this DateTime dateValue)
         {
             var kind = DateTimeKind.Utc;
 
-            return (dateValue.Kind == DateTimeKind.Unspecified)
+            return dateValue.Kind == DateTimeKind.Unspecified
                 ? DateTime.SpecifyKind(dateValue, kind).ToString(
                     GetDateTimeKindFormat(kind),
                     CultureInfo.InvariantCulture)
@@ -39,111 +89,175 @@ namespace Jellyfin.Plugin.PlaybackReporting.Data
                     CultureInfo.InvariantCulture);
         }
 
-        private static string GetDateTimeKindFormat(
-           DateTimeKind kind)
+        private static string GetDateTimeKindFormat(DateTimeKind kind)
+            => kind == DateTimeKind.Utc ? DatetimeFormatUtc : DatetimeFormatLocal;
+
+        public static bool TryReadDateTime(this SqliteDataReader reader, int index, out DateTime result)
         {
-            return (kind == DateTimeKind.Utc) ? _datetimeFormatUtc : _datetimeFormatLocal;
-        }
-
-        /// <summary>
-        /// An array of ISO-8601 DateTime formats that we support parsing.
-        /// </summary>
-        private static readonly string[] _datetimeFormats = {
-      "THHmmssK",
-      "THHmmK",
-      "HH:mm:ss.FFFFFFFK",
-      "HH:mm:ssK",
-      "HH:mmK",
-      "yyyy-MM-dd HH:mm:ss.FFFFFFFK", /* NOTE: UTC default (5). */
-      "yyyy-MM-dd HH:mm:ssK",
-      "yyyy-MM-dd HH:mmK",
-      "yyyy-MM-ddTHH:mm:ss.FFFFFFFK",
-      "yyyy-MM-ddTHH:mmK",
-      "yyyy-MM-ddTHH:mm:ssK",
-      "yyyyMMddHHmmssK",
-      "yyyyMMddHHmmK",
-      "yyyyMMddTHHmmssFFFFFFFK",
-      "THHmmss",
-      "THHmm",
-      "HH:mm:ss.FFFFFFF",
-      "HH:mm:ss",
-      "HH:mm",
-      "yyyy-MM-dd HH:mm:ss.FFFFFFF", /* NOTE: Non-UTC default (19). */
-      "yyyy-MM-dd HH:mm:ss",
-      "yyyy-MM-dd HH:mm",
-      "yyyy-MM-ddTHH:mm:ss.FFFFFFF",
-      "yyyy-MM-ddTHH:mm",
-      "yyyy-MM-ddTHH:mm:ss",
-      "yyyyMMddHHmmss",
-      "yyyyMMddHHmm",
-      "yyyyMMddTHHmmssFFFFFFF",
-      "yyyy-MM-dd",
-      "yyyyMMdd",
-      "yy-MM-dd"
-    };
-
-        private static readonly string _datetimeFormatUtc = _datetimeFormats[5];
-        private static readonly string _datetimeFormatLocal = _datetimeFormats[19];
-
-        public static DateTime ReadDateTime(this ResultSetValue result)
-        {
-            var dateText = result.ToString();
-
-            return DateTime.ParseExact(
-                dateText, _datetimeFormats,
-                DateTimeFormatInfo.InvariantInfo,
-                DateTimeStyles.None).ToUniversalTime();
-        }
-
-        private static void CheckName(string name)
-        {
-#if DEBUG
-            //if (!name.IndexOf("@", StringComparison.OrdinalIgnoreCase) != 0)
+            if (reader.IsDBNull(index))
             {
-                throw new Exception("Invalid param name: " + name);
+                result = default;
+                return false;
             }
-#endif
+
+            var dateText = reader.GetString(index);
+
+            if (DateTime.TryParseExact(dateText, _datetimeFormats, DateTimeFormatInfo.InvariantInfo, DateTimeStyles.AdjustToUniversal, out var dateTimeResult))
+            {
+                // If the resulting DateTimeKind is Unspecified it is actually Utc.
+                // This is required downstream for the Json serializer.
+                if (dateTimeResult.Kind == DateTimeKind.Unspecified)
+                {
+                    dateTimeResult = DateTime.SpecifyKind(dateTimeResult, DateTimeKind.Utc);
+                }
+
+                result = dateTimeResult;
+                return true;
+            }
+
+            result = default;
+            return false;
         }
 
-        public static void TryBind(this IStatement statement, string name, string value)
+        public static bool TryGetGuid(this SqliteDataReader reader, int index, out Guid result)
         {
-            if (statement.BindParameters.TryGetValue(name, out IBindParameter? bindParam))
+            if (reader.IsDBNull(index))
             {
-                if (value == null)
+                result = default;
+                return false;
+            }
+
+            result = reader.GetGuid(index);
+            return true;
+        }
+
+        public static bool TryGetString(this SqliteDataReader reader, int index, out string result)
+        {
+            result = string.Empty;
+
+            if (reader.IsDBNull(index))
+            {
+                return false;
+            }
+
+            result = reader.GetString(index);
+            return true;
+        }
+
+        public static bool TryGetBoolean(this SqliteDataReader reader, int index, out bool result)
+        {
+            if (reader.IsDBNull(index))
+            {
+                result = default;
+                return false;
+            }
+
+            result = reader.GetBoolean(index);
+            return true;
+        }
+
+        public static bool TryGetInt32(this SqliteDataReader reader, int index, out int result)
+        {
+            if (reader.IsDBNull(index))
+            {
+                result = default;
+                return false;
+            }
+
+            result = reader.GetInt32(index);
+            return true;
+        }
+
+        public static bool TryGetInt64(this SqliteDataReader reader, int index, out long result)
+        {
+            if (reader.IsDBNull(index))
+            {
+                result = default;
+                return false;
+            }
+
+            result = reader.GetInt64(index);
+            return true;
+        }
+
+        public static bool TryGetSingle(this SqliteDataReader reader, int index, out float result)
+        {
+            if (reader.IsDBNull(index))
+            {
+                result = default;
+                return false;
+            }
+
+            result = reader.GetFloat(index);
+            return true;
+        }
+
+        public static bool TryGetDouble(this SqliteDataReader reader, int index, out double result)
+        {
+            if (reader.IsDBNull(index))
+            {
+                result = default;
+                return false;
+            }
+
+            result = reader.GetDouble(index);
+            return true;
+        }
+
+        public static void TryBind(this SqliteCommand statement, string name, Guid value)
+        {
+            statement.TryBind(name, value, true);
+        }
+
+        public static void TryBind(this SqliteCommand statement, string name, object? value, bool isBlob = false)
+        {
+            var preparedValue = value ?? DBNull.Value;
+            if (statement.Parameters.Contains(name))
+            {
+                statement.Parameters[name].Value = preparedValue;
+            }
+            else
+            {
+                // Blobs aren't always detected automatically
+                if (isBlob)
                 {
-                    bindParam.BindNull();
+                    statement.Parameters.Add(new SqliteParameter(name, SqliteType.Blob) { Value = value });
                 }
                 else
                 {
-                    bindParam.Bind(value);
+                    statement.Parameters.AddWithValue(name, preparedValue);
                 }
             }
-            else
+        }
+
+        public static void TryBindNull(this SqliteCommand statement, string name)
+        {
+            statement.TryBind(name, DBNull.Value);
+        }
+
+        public static IEnumerable<SqliteDataReader> ExecuteQuery(this SqliteCommand command)
+        {
+            using (var reader = command.ExecuteReader())
             {
-                CheckName(name);
+                while (reader.Read())
+                {
+                    yield return reader;
+                }
             }
         }
 
-        public static void TryBind(this IStatement statement, string name, int value)
+        public static int SelectScalarInt(this SqliteCommand command)
         {
-            if (statement.BindParameters.TryGetValue(name, out IBindParameter? bindParam))
-            {
-                bindParam.Bind(value);
-            }
-            else
-            {
-                CheckName(name);
-            }
+            var result = command.ExecuteScalar();
+            // Can't be null since the method is used to retrieve Count
+            return Convert.ToInt32(result!, CultureInfo.InvariantCulture);
         }
 
-        public static IEnumerable<IReadOnlyList<ResultSetValue>> ExecuteQuery(
-            this IStatement This)
+        public static SqliteCommand PrepareStatement(this SqliteConnection sqliteConnection, string sql)
         {
-            while (This.MoveNext())
-            {
-                yield return This.Current;
-            }
+            var command = sqliteConnection.CreateCommand();
+            command.CommandText = sql;
+            return command;
         }
     }
-
 }

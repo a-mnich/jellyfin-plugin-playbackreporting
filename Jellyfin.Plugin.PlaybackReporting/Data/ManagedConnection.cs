@@ -1,79 +1,62 @@
-﻿/*
-Copyright(C) 2018
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program. If not, see<http://www.gnu.org/licenses/>.
-*/
+#pragma warning disable CS1591
 
 using System;
 using System.Collections.Generic;
-using SQLitePCL.pretty;
+using System.Threading;
+using Microsoft.Data.Sqlite;
 
-namespace Jellyfin.Plugin.PlaybackReporting.Data
+namespace Jellyfin.Plugin.PlaybackReporting.Data;
+
+public sealed class ManagedConnection : IDisposable
 {
-    public class ManagedConnection : IDisposable
+    private readonly SemaphoreSlim? _writeLock;
+
+    private SqliteConnection _db;
+
+    private bool _disposed = false;
+
+    public ManagedConnection(SqliteConnection db, SemaphoreSlim? writeLock)
     {
-        private readonly SQLiteDatabaseConnection _db;
-        private readonly bool _closeOnDispose;
-
-        public ManagedConnection(SQLiteDatabaseConnection db, bool closeOnDispose)
-        {
-            _db = db;
-            _closeOnDispose = closeOnDispose;
-        }
-
-        public IStatement PrepareStatement(string sql)
-        {
-            return _db.PrepareStatement(sql);
-        }
-
-
-        public void Execute(string sql, params object[] values)
-        {
-            _db.Execute(sql, values);
-        }
-
-        public int GetChangeCount()
-        {
-            return _db.TotalChanges;
-        }
-
-        public void RunInTransaction(Action<IDatabaseConnection> action, TransactionMode mode)
-        {
-            _db.RunInTransaction(action, mode);
-        }
-
-        public IEnumerable<IReadOnlyList<ResultSetValue>> Query(string sql)
-        {
-            return _db.Query(sql);
-        }
-
-        public void Close()
-        {
-            using (_db)
-            {
-
-            }
-        }
-
-        public void Dispose()
-        {
-            if (_closeOnDispose)
-            {
-                Close();
-            }
-            GC.SuppressFinalize(this);
-        }
-
+        _db = db;
+        _writeLock = writeLock;
     }
 
+    public SqliteTransaction BeginTransaction()
+        => _db.BeginTransaction();
+
+    public SqliteCommand CreateCommand()
+        => _db.CreateCommand();
+
+    public void Execute(string commandText)
+        => _db.Execute(commandText);
+
+    public SqliteCommand PrepareStatement(string sql)
+        => _db.PrepareStatement(sql);
+
+    public IEnumerable<SqliteDataReader> Query(string commandText)
+        => _db.Query(commandText);
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_writeLock is null)
+        {
+            // Read connections are managed with an internal pool
+            _db.Dispose();
+        }
+        else
+        {
+            // Write lock is managed by BaseSqliteRepository
+            // Don't dispose here
+            _writeLock.Release();
+        }
+
+        _db = null!;
+
+        _disposed = true;
+    }
 }
